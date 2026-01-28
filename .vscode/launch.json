@@ -1,0 +1,12 @@
+{
+    "configurations": [
+        {
+            "name": "GCS",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/GroundControlSystem/gcs.py",
+            "console": "integratedTerminal",
+            // "args": "${command:pickArgs}"
+        }
+    ]
+}
