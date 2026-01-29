@@ -31,6 +31,7 @@
 #include <mqueue.h>
 #include <zlib.h>       // for crc32
 #include <stdint.h>
+#include <stdbool.h>
 
 #define SERVER_PORT         5005
 #define BUFFER_SIZE         1024
@@ -61,12 +62,61 @@ typedef enum {
     DATA_IMAGE           = 0x31,
 } MessageType;
 
+#define CB_BUFFER_SIZE MAX_MESSAGE_SIZE  // must be a power of 2 for simple wrap-around
+
+typedef struct {
+    uint8_t buffer[CB_BUFFER_SIZE];
+    uint16_t head;   // points to next write. Indices in the array
+    uint16_t tail;   // points to next read. Indices in the array
+} CircularBuffer;
+
+CircularBuffer cb;
+
+// Initialize the buffer
+void cb_init(CircularBuffer *cb) {
+    cb->head = 0;
+    cb->tail = 0;
+}
+
+// Check if the buffer is empty
+bool cb_is_empty(CircularBuffer *cb) {
+    return cb->head == cb->tail;
+}
+
+// Check if the buffer is full
+bool cb_is_full(CircularBuffer *cb) {
+    return ((cb->head + 1) & (CB_BUFFER_SIZE - 1)) == cb->tail;
+}
+
+// Add an element to the buffer
+bool cb_push(CircularBuffer *cb, uint8_t data) {
+    if (cb_is_full(cb)) return false;  // buffer full
+    cb->buffer[cb->head] = data;
+    cb->head = (cb->head + 1) & (CB_BUFFER_SIZE - 1);  // increment head and consider wrap around
+    return true;
+}
+
+// Remove an element from the buffer
+bool cb_pop(CircularBuffer *cb, uint8_t *data) {
+    if (cb_is_empty(cb)) return false;  // buffer empty
+    *data = cb->buffer[cb->tail];
+    cb->tail = (cb->tail + 1) & (CB_BUFFER_SIZE - 1);  // increment tail and consider wrap around
+    return true;
+}
+
 void *savePayload(uint8_t *payload) {
 
     // FIXME: Confirm the full message is being saved
     printf("Saving %s to persistent storage.\n\n", payload);
 
-    // TODO: Save to active memory in circular buffer
+    // Save to active memory in circular buffer
+    bool out = cb_push(&cb, *payload);
+
+    if (!out) {
+        printf("Circular buffer full, cannot save payload.\n");
+    } else {
+        printf("Payload saved to circular buffer.\n");
+    }
 
     return NULL;
 }
