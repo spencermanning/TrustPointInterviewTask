@@ -290,6 +290,8 @@ void *cmdRecvThread(void *arg) {
 int main() {
     pthread_t thread;
 
+    cb_init(&cb);
+
     if (pthread_create(&thread, NULL, cmdRecvThread, NULL) != 0) {
         perror("Failed to create thread");
         return EXIT_FAILURE;
