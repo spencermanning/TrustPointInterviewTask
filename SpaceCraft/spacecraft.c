@@ -71,6 +71,43 @@ void *savePayload(uint8_t *payload) {
     return NULL;
 }
 
+void print_bytes(const uint8_t *buf, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        printf("%02X ", buf[i]);
+    }
+    printf("\n");
+}
+
+// Build Ack/Nack function (returns length of datagram)
+size_t buildAckNack(uint8_t *ack_datagram, uint8_t seq_num, int is_ack) {
+        size_t ack_len = 0;
+
+        // Sync bytes
+        ack_datagram[ack_len++] = 0xAB;
+        ack_datagram[ack_len++] = 0xBA;
+
+        // Build 3-byte header: LEN=0 (12 bits), TYPE (6 bits), SEQ (6 bits)
+        uint32_t header = (((uint32_t)0 & 0xFFFu) << 12) |
+                          ((((uint32_t)(is_ack ? ACK : NACK)) & MAX_TYPE_NUM) << TYPE_LENGTH) |
+                          (((uint32_t)seq_num) & MAX_SEQ_NUM);
+
+        // Write header as big-endian 3 bytes
+        ack_datagram[ack_len++] = (header >> 16) & 0xFF;
+        ack_datagram[ack_len++] = (header >> 8) & 0xFF;
+        ack_datagram[ack_len++] = (header) & 0xFF;
+
+        // Compute CRC over everything except the CRC field itself
+        uint32_t ack_crc = crc32(0L, ack_datagram, ack_len);
+        uint32_t ack_crc_net = htonl(ack_crc);
+
+        // Append CRC
+        memcpy(ack_datagram + ack_len, &ack_crc_net, 4);
+        ack_len += 4;
+
+        return ack_len;
+}
+
 void *cmdRecvThread(void *arg) {
     (void)arg;
     int sockfd;
@@ -107,7 +144,8 @@ void *cmdRecvThread(void *arg) {
                          (struct sockaddr*)&client_addr, &addr_len);
         if (n < 0) {
             perror("recvfrom failed");
-            sendto(sockfd, "NACK", 4, 0, (struct sockaddr*)&client_addr, addr_len);
+            size_t nack_len = buildAckNack(nack_datagram, 0, 0);
+            sendto(sockfd, nack_datagram, nack_len, 0, (struct sockaddr*)&client_addr, addr_len);
             continue;
         }
         buffer[n] = '\0';  // null-terminate received string
@@ -115,9 +153,11 @@ void *cmdRecvThread(void *arg) {
         print_bytes((uint8_t*)buffer, n);
 
         // Extract received CRC (last 4 bytes)
-        if (n < 4) {
-            printf("Packet too short for CRC\n");
-            sendto(sockfd, "NACK", 4, 0, (struct sockaddr*)&client_addr, addr_len);
+        // Minimum packet: SYNC(2) + HEADER(3) + RESERVED(4) + CRC(4) => 13 bytes
+        if (n < (2 + 3 + 4 + 4)) {
+            printf("Packet too short\n");
+            size_t nack_len = buildAckNack(nack_datagram, 0, 0);
+            sendto(sockfd, nack_datagram, nack_len, 0, (struct sockaddr*)&client_addr, addr_len);
             continue;
         }
         received_crc = ntohl(*(uint32_t*)(buffer + n - 4));
@@ -125,22 +165,42 @@ void *cmdRecvThread(void *arg) {
 
         if (received_crc != computed_crc) {
             printf("CRC mismatch: received 0x%08X, computed 0x%08X\n", received_crc, computed_crc);
-            sendto(sockfd, "NACK", 4, 0, (struct sockaddr*)&client_addr, addr_len);
+            size_t nack_len = buildAckNack(nack_datagram, 0, 0);
+            sendto(sockfd, nack_datagram, nack_len, 0, (struct sockaddr*)&client_addr, addr_len);
             continue;
         }
 
         printf("CRC valid: 0x%08X\n", received_crc);
 
-        // Track sequence number (first byte of payload after any header)
-        uint8_t seq_num = buffer[4] & MAX_SEQ_NUM;
+        // Reconstruct header and extract seq/type
+        uint32_t header = ((uint8_t)buffer[2] << 16) | ((uint8_t)buffer[3] << 8) | (uint8_t)buffer[4];
+        uint8_t seq_num = header & MAX_SEQ_NUM;
         uint8_t *payload_start = (uint8_t*)buffer + 5;
-        size_t payload_len = n - 1 - 4;  // exclude seq_num and CRC
+
+        // Ensure payload length excludes sync (2), header (3), reserved (4), and CRC (4)
+        if (n < (2 + 3 + 4 + 4)) {
+            printf("Packet too short for payload\n");
+            size_t nack_len = buildAckNack(nack_datagram, seq_num, 0);
+            sendto(sockfd, nack_datagram, nack_len, 0, (struct sockaddr*)&client_addr, addr_len);
+            continue;
+        }
+        size_t payload_len = n - 2 - 3 - 4 - 4;  // exclude sync, header, reserved, crc
 
         // Store in a reassembly buffer indexed by sequence
         static uint8_t reassembly_buf[MAX_MESSAGE_SIZE];
         static size_t reassembly_offset = 0;
-        memcpy(reassembly_buf + reassembly_offset, payload_start, payload_len);
-        reassembly_offset += payload_len;
+        if (payload_len + reassembly_offset <= MAX_MESSAGE_SIZE) {
+            memcpy(reassembly_buf + reassembly_offset, payload_start, payload_len);
+            reassembly_offset += payload_len;
+        } else {
+            printf("Reassembly buffer overflow\n");
+            // send nack
+            size_t nack_len = buildAckNack(nack_datagram, seq_num, 0);
+            sendto(sockfd, nack_datagram, nack_len, 0, (struct sockaddr*)&client_addr, addr_len);
+            // reset for safety
+            reassembly_offset = 0;
+            continue;
+        }
 
         // Check if this is the last fragment (high bit set in seq_num)
         if (seq_num & LAST_SEQ_NUM) {
@@ -157,8 +217,36 @@ void *cmdRecvThread(void *arg) {
             printf("Fragment %d received, awaiting more\n", seq_num & 0x7F);
         }
 
-        // FIXME: Should this be moved up to after CRC check?
-        sendto(sockfd, "ACK", 3, 0, (struct sockaddr*)&client_addr, addr_len);
+        // Build and send ACK using the same 3-byte header format as data
+        size_t ack_len = buildAckNack(ack_datagram, seq_num, 1);
+        sendto(sockfd, ack_datagram, ack_len, 0, (struct sockaddr*)&client_addr, addr_len);
+
+        // Parse type out of reconstructed header
+        uint8_t msg_type = (header >> TYPE_LENGTH) & MAX_TYPE_NUM;
+
+        printf("Message type: 0x%02X\n", msg_type);
+
+        if (msg_type != ACK && msg_type != NACK) {
+            // Process message based on type
+            switch (msg_type) {
+                case CMD_EXECUTE:
+                    printf("Executing command\n");
+                    // TODO: Fill in response handling and return message
+                    break;
+                case CMD_SET_PARAM:
+                    printf("Setting parameter\n");
+                    // TODO: Fill in response handling and return message
+                    break;
+                case CMD_GET_PARAM:
+                    printf("Getting parameter\n");
+                    // TODO: Fill in response handling and return message
+                    break;
+                default:
+                    printf("Unknown message type: 0x%02X\n", msg_type);
+            }
+        } else {
+            printf("Received ACK/NACK, no further processing\n");
+        }
     }
 
     close(sockfd);
