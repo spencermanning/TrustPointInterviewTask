@@ -6,53 +6,90 @@ import random
 print("Start GCS")
 
 def main():
+    """Main function to run the Ground Control Station."""
+
+    # Definitions:
+        # Datagram
+            # | SYNC (2 bytes) | HEADER (3 bytes) | PAYLOAD (variable) | RESERVED (4 bytes) | CRC32 (4 bytes) |
+        # "Message"
+        #   All payloads sent in sequence, reassembled from datagrams on spacecraft
 
     UDP_IP = "127.0.0.1" # localhost
     UDP_PORT = 5005
     NUM_RETRIES = 3
+    
+    SYNC_BYTES = [0xAB, 0xBA]
+
+    MAX_TYPE_NUM = 0x3F  # 0b11 1111 Largest type number (6 bits)
+    LAST_SEQ_NUM = 0x20 # 0x10 0000 Indicates last chunk of dissassembled message
+    MAX_SEQ_NUM = 0x3F  # 0b11 1111 Largest sequence number (6 bits)
+    
+    LEN_LENGTH = 12   # Length field is 12 bits
+    TYPE_LENGTH = 6   # Type field is 6 bits
+    SEQ_LENGTH = 6    # Sequence number field is 6 bits
+
+    RESERVED = b"\x00\x01\x02\x03"
+
+    MAX_PAYLOAD_SIZE = 8    # Max size of payload in a single datagram
+    MAX_MESSAGE_SIZE = 32   # Max size of complete reassembled message, excluding headers
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    # TODO: Determine if SO_REUSEADDR is needed here
     # sock.bind((UDP_IP, UDP_PORT))
 
-    while True:
-        data = b""
-        input("\nPress Enter to send command: ")
-        # MESSAGE = input("Send a message: ")
+    # TODO: Add more example TYPES. ie retries, past requests, etc
+
+    test_messages = [b"CMD1", b"CMD2", b"CMD3", bytes(range(200))]
+
+    for msg_idx, message in enumerate(test_messages):
+        rxdata = b""
+        if msg_idx > len(test_messages) - 1:
+            print("All test messages sent")
+            break
+
+        input("\nPress Enter to send %s..." % test_messages[msg_idx])
 
         retries = 0
-        while data != b"ACK":
-            SYNC_BYTES = [0xAB, 0xBA]
-            LEN = 5                         # Example length
-            # LEN = random.randint(1, 0xFFF)  # Random length for testing
-            TYPE = 1                        # Example type
-            SEQ = 0                         # Example sequence number
-            PAYLOAD = b"CMD"                # Example payload
-            RESERVED = b"\x00\x01\x02\x03"
-            
-            HEADER = (LEN & 0xFFF) << 12 | (TYPE & 0x3F) << 6 | SEQ & 0x3F
-            MESSAGE = [bytes(SYNC_BYTES), HEADER.to_bytes(2, 'big'), PAYLOAD, RESERVED] # TODO: Make sure big is correct
-            MESSAGE = b"".join(MESSAGE)
-            CRC = binascii.crc32(MESSAGE) & 0xFFFFFFFF
-            MESSAGE += CRC.to_bytes(4, 'big')
-            print(f"Final message with CRC: {MESSAGE}")
+        max_retries_reached = False
+        while rxdata != b"ACK" and not max_retries_reached:
 
-            sock.sendto(MESSAGE, (UDP_IP, UDP_PORT))
-            
-            data, addr = sock.recvfrom(1024)
-            print(f"Received {data} from {addr}")
-            
-            if data == b"ACK":
-                print("ACK received, command successful")
-                break
-            elif data == b"NACK":
-                retries += 1
-                if retries >= NUM_RETRIES:
-                    print("Max retries reached, aborting command")
+            # Could need one more datagrams if message is long
+            for payload_cnt, payload in enumerate([message[i:i+MAX_PAYLOAD_SIZE] for i in range(0, len(message), MAX_PAYLOAD_SIZE)]):
+
+                LEN = len(payload)
+                TYPE = 1 # Example type
+                SEQ = msg_idx                       
+                if payload_cnt == (len(message) - 1) // MAX_PAYLOAD_SIZE:
+                    SEQ = SEQ | LAST_SEQ_NUM  # Mark as last sequence
+                
+                HEADER = (LEN & 0xFFF) << LEN_LENGTH | (TYPE & MAX_TYPE_NUM) << TYPE_LENGTH | SEQ & MAX_SEQ_NUM
+                DATAGRAM = [bytes(SYNC_BYTES), HEADER.to_bytes(3, 'big'), payload, RESERVED]
+                DATAGRAM = b"".join(DATAGRAM)
+                CRC = binascii.crc32(DATAGRAM) & 0xFFFFFFFF
+                DATAGRAM += CRC.to_bytes(4, 'big')
+                print(f"Final datagram with CRC: {DATAGRAM}")
+
+                sock.sendto(DATAGRAM, (UDP_IP, UDP_PORT))
+                rxdata, addr = sock.recvfrom(1024)
+                print(f"Received {rxdata} from {addr}")
+                
+                if rxdata == b"ACK":
+                    print("ACK received, command successful")
+                    msg_idx = msg_idx + 1
+                    continue
+                elif rxdata == b"NACK":
+                    retries += 1
+                    if retries >= NUM_RETRIES:
+                        print("Max retries reached, aborting command")
+                        max_retries_reached = True
+                        break
+                    print("Resending...")
+                    # NOTE: msg_idx stays the same for a duplicate message send
+                else:
+                    print("Unexpected response, aborting command")
+                    msg_idx = msg_idx + 1
                     break
-                print("Resending...")
-            else:
-                print("Unexpected response, aborting command")
-                break
 
 if __name__ == "__main__":
     main()
