@@ -150,22 +150,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-# send_command.py
-# request_data.py
-# replay_logs.py
-
-# Ground-side algorithms (Python)
-# Fragmentation and reassembly
-# Timeout + retransmission
-# Sliding window (optional, bonus points)
-# Log-based persistence for sent/received packets
-
-# 6. Python Ground Implementation (what I’d actually write)
-# I’d implement:
-# Packet class (encode/decode)
-# CRC32 using binascii.crc32
-# Transport abstraction (UART/TCP/UDP simulated)
-# Unit tests for encoding/decoding

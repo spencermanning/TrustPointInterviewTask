@@ -1,27 +1,3 @@
-// protocol_parser.c – byte stream → packets
-// crc.c – CRC32 computation
-// storage.c – persistent message storage (flash/file abstraction)
-// comm.c – send/receive interface
-// message_manager.c – sequencing, ACK/NACK, retries
-
-
-// while (true):
-//     read_bytes()
-//     if valid_packet:
-//         if CRC ok:
-//             store_payload()
-//             send_ack()
-//         else:
-//             send_nack()
-
-// Spacecraft-side algorithms (C)
-//      Packet framing from byte stream
-//      CRC verification
-//      Sequence tracking
-//      Ring buffer or flash-backed queue
-//      Simple retry/ACK logic
-//      I’d keep algorithms O(1) or O(n) with bounded memory.
-
 #include <stdio.h>
 #include <stdlib.h>     // for EXIT_FAILURE
 #include <string.h>
@@ -33,11 +9,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define SERVER_PORT         5005
-#define BUFFER_SIZE         1024
-#define MAX_MESSAGE_SIZE    32      // Max size of complete reassembled message, excluding headers
-#define LAST_SEQ_NUM        0x20    // Indicates last chunk of dissassembled message
-#define MAX_SEQ_NUM         0x3F    // Largest sequence number (6 bits)
+#define SERVER_PORT             5005
+#define BUFFER_SIZE             1024
+#define MAX_MESSAGE_SIZE        32      // Max size of complete reassembled message, excluding headers
+#define LAST_SEQ_NUM            0x20    // Indicates last chunk of dissassembled message
+#define MAX_SEQ_NUM             0x3F    // Largest sequence number (6 bits)
+#define TYPE_LENGTH             6       // Type field is 6 bits
+#define MAX_TYPE_NUM            0x3F    // Max type number (6 bits)
+#define SYNC_BYTES              {0xAB, 0xBA}
+#define RESERVED_BYTES          {0x00, 0x01, 0x02, 0x03}
+#define ACKNACK_DATAGRAM_SIZE   0x10
 
 // mqd_t mq = -1;
 
@@ -165,6 +146,8 @@ void *cmdRecvThread(void *arg) {
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
     uint32_t received_crc, computed_crc;
+    uint8_t nack_datagram[ACKNACK_DATAGRAM_SIZE];
+    uint8_t ack_datagram[ACKNACK_DATAGRAM_SIZE];
 
     // 1. Create UDP socket
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -187,7 +170,7 @@ void *cmdRecvThread(void *arg) {
 
     printf("Server listening on port %d...\n", SERVER_PORT);
 
-    // TODO: Handle duplicates somewhere. Is that through a different "TYPE" message?
+    // TODO: Handle duplicates
 
     while (1) {
         int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
@@ -264,7 +247,7 @@ void *cmdRecvThread(void *arg) {
             reassembly_buf[0] = '\0';
 
         } else {
-            printf("Fragment %d received, awaiting more\n", seq_num & 0x7F);
+            printf("Fragment %d received, awaiting more\n", seq_num & MAX_SEQ_NUM);
         }
 
         // Build and send ACK using the same 3-byte header format as data
