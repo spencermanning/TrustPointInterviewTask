@@ -19,7 +19,4 @@ $(TARGET): $(OBJS)
 clean:
 	rm -f $(TARGET) $(OBJS)
 
-# spacecraft: spacecraft.c
-# 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
-
-# gcc -g -O0 spacecraft.c -o spacecraft
+.PHONY: all clean

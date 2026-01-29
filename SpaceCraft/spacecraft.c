@@ -49,18 +49,13 @@ void print_bytes(const uint8_t *buf, size_t len)
 }
 
 
-void *savePayload(void *arg) {
-    (void)arg;
-    // char buf[BUFFER_SIZE];
-    // ssize_t n = mq_receive(mq, buf, BUFFER_SIZE, NULL);
-    
-    // if (n < 0) {
-    //     perror("mq_receive failed");
-    //     return NULL;
-    // }
+void *savePayload(uint8_t *payload) {
 
-    // // Simulate saving payload to persistent storage
-    // printf("Saving payload: %.*s\n", (int)n, buf);
+    // FIXME: Confirm the full message is being saved
+    printf("Saving %s to persistent storage.\n\n", payload);
+
+    // TODO: Save to active memory in circular buffer
+
     return NULL;
 }
 
@@ -92,6 +87,8 @@ void *cmdRecvThread(void *arg) {
     }
 
     printf("Server listening on port %d...\n", SERVER_PORT);
+
+    // TODO: Handle duplicates somewhere. Is that through a different "TYPE" message?
 
     while (1) {
         int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
@@ -148,14 +145,11 @@ void *cmdRecvThread(void *arg) {
             printf("Fragment %d received, awaiting more\n", seq_num & 0x7F);
         }
 
+        // FIXME: Should this be moved up to after CRC check?
         sendto(sockfd, "ACK", 3, 0, (struct sockaddr*)&client_addr, addr_len);
-
-        // Echo back
-        // sendto(sockfd, buffer, n, 0, (struct sockaddr*)&client_addr, addr_len);
     }
 
     close(sockfd);
-    // return 0;
 
     return NULL;
 }
