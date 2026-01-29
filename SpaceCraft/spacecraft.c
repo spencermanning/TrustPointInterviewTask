@@ -40,14 +40,26 @@
 
 // mqd_t mq = -1;
 
-void print_bytes(const uint8_t *buf, size_t len)
-{
-    for (size_t i = 0; i < len; i++) {
-        printf("%02X ", buf[i]);
-    }
-    printf("\n");
-}
+typedef enum {
+    CMD_EXECUTE          = 0x01,
+    CMD_SET_PARAM        = 0x02,
+    CMD_GET_PARAM        = 0x03,
+    PING                 = 0x06,
+    PONG                 = 0x07,
+    LINK_STATUS          = 0x08,
+    TIME_SYNC            = 0x09,
+    RETRANSMIT_REQUEST   = 0x0A,
+    FRAGMENT_MISSING     = 0x0B,
 
+    ACK                  = 0x10,
+    NACK                 = 0x11,
+
+    TM_HOUSEKEEPING      = 0x20,
+    TM_SUBSYSTEM_STATUS  = 0x21,
+
+    DATA_SCIENCE         = 0x30,
+    DATA_IMAGE           = 0x31,
+} MessageType;
 
 void *savePayload(uint8_t *payload) {
 

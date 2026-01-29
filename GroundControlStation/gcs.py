@@ -38,11 +38,31 @@ def main():
     # TODO: Determine if SO_REUSEADDR is needed here
     # sock.bind((UDP_IP, UDP_PORT))
 
-    # TODO: Add more example TYPES. ie retries, past requests, etc
+    CMD_EXECUTE          = 0x01
+    CMD_SET_PARAM        = 0x02
+    CMD_GET_PARAM        = 0x03
+    PING                 = 0x06
+    PONG                 = 0x07
+    LINK_STATUS          = 0x08
+    TIME_SYNC            = 0x09
+    RETRANSMIT_REQUEST   = 0x0A
+    FRAGMENT_MISSING     = 0x0B
 
-    test_messages = [b"CMD1", b"CMD2", b"CMD3", bytes(range(200))]
+    ACK                  = 0x10
+    NACK                 = 0x11
 
-    for msg_idx, message in enumerate(test_messages):
+    TM_HOUSEKEEPING      = 0x20
+    TM_SUBSYSTEM_STATUS  = 0x21
+
+    DATA_SCIENCE         = 0x30
+    DATA_IMAGE           = 0x31
+
+    test_message_pairs = [
+        (b"CMD1", 0x01),  # CMD_EXECUTE
+        (b"CMD2", 0x02),  # CMD_SET_PARAM
+        (b"CMD3", 0x03),  # CMD_GET_PARAM
+        (bytes(range(200)), 0x30),  # DATA_SCIENCE
+        ]
         rxdata = b""
         if msg_idx > len(test_messages) - 1:
             print("All test messages sent")
