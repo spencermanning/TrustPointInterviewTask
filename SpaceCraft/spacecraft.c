@@ -32,10 +32,13 @@
 #include <zlib.h>       // for crc32
 #include <stdint.h>
 
-#define SERVER_PORT 5005
-#define BUFFER_SIZE 1024
+#define SERVER_PORT         5005
+#define BUFFER_SIZE         1024
+#define MAX_MESSAGE_SIZE    32      // Max size of complete reassembled message, excluding headers
+#define LAST_SEQ_NUM        0x20    // Indicates last chunk of dissassembled message
+#define MAX_SEQ_NUM         0x3F    // Largest sequence number (6 bits)
 
-mqd_t mq = -1;
+// mqd_t mq = -1;
 
 void print_bytes(const uint8_t *buf, size_t len)
 {
@@ -119,8 +122,31 @@ void *cmdRecvThread(void *arg) {
 
         printf("CRC valid: 0x%08X\n", received_crc);
 
-        // Save payload in case send window closes
-        // mq_send(mq, buffer, n, 0);
+        // Track sequence number (first byte of payload after any header)
+        uint8_t seq_num = buffer[4] & MAX_SEQ_NUM;
+        uint8_t *payload_start = (uint8_t*)buffer + 5;
+        size_t payload_len = n - 1 - 4;  // exclude seq_num and CRC
+
+        // Store in a reassembly buffer indexed by sequence
+        static uint8_t reassembly_buf[MAX_MESSAGE_SIZE];
+        static size_t reassembly_offset = 0;
+        memcpy(reassembly_buf + reassembly_offset, payload_start, payload_len);
+        reassembly_offset += payload_len;
+
+        // Check if this is the last fragment (high bit set in seq_num)
+        if (seq_num & LAST_SEQ_NUM) {
+            printf("Final fragment received, message complete\n");
+
+            // Save complete payload
+            savePayload(reassembly_buf);
+
+            // Clear buffer for next message
+            reassembly_offset = 0;
+            reassembly_buf[0] = '\0';
+
+        } else {
+            printf("Fragment %d received, awaiting more\n", seq_num & 0x7F);
+        }
 
         sendto(sockfd, "ACK", 3, 0, (struct sockaddr*)&client_addr, addr_len);
 
