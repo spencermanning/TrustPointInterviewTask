@@ -1,12 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>     // for EXIT_FAILURE
-#include <string.h>
-#include <arpa/inet.h>   // for socket(), sockaddr_in, socklen_t
-#include <unistd.h>      // for close()
+#include <string.h>     // for memset(), memcpy()
+#include <arpa/inet.h>  // for socket(), sockaddr_in, socklen_t
+#include <unistd.h>     // for close()
 #include <pthread.h>
 #include <mqueue.h>
 #include <zlib.h>       // for crc32
-#include <stdint.h>
+#include <stdint.h>     // for uint8_t, uint16_t, uint32_t
 #include <stdbool.h>
 
 #define SERVER_PORT             5005
@@ -19,6 +19,10 @@
 #define SYNC_BYTES              {0xAB, 0xBA}
 #define RESERVED_BYTES          {0x00, 0x01, 0x02, 0x03}
 #define ACKNACK_DATAGRAM_SIZE   0x10
+#define SIZE_SYNC               2
+#define SIZE_HEADER             3
+#define SIZE_RESERVED           4
+#define SIZE_CRC                4
 
 // mqd_t mq = -1;
 
@@ -130,6 +134,8 @@ size_t buildAckNack(uint8_t *ack_datagram, uint8_t seq_num, int is_ack) {
 
         // Compute CRC over everything except the CRC field itself
         uint32_t ack_crc = crc32(0L, ack_datagram, ack_len);
+        // Convert CRC to network byte order (big-endian)
+        // host to network long
         uint32_t ack_crc_net = htonl(ack_crc);
 
         // Append CRC
@@ -149,17 +155,18 @@ void *cmdRecvThread(void *arg) {
     uint8_t nack_datagram[ACKNACK_DATAGRAM_SIZE];
     uint8_t ack_datagram[ACKNACK_DATAGRAM_SIZE];
 
-    // 1. Create UDP socket
+    // Create UDP socket
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("socket failed");
         exit(EXIT_FAILURE);
     }
 
-    // 2. Bind to localhost:SERVER_PORT
+    // Bind to localhost:SERVER_PORT
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     // server_addr.sin_addr.s_addr = INADDR_ANY;  // listen on all local IPs
     server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");  // listen on all local IPs
+    // host to network short
     server_addr.sin_port = htons(SERVER_PORT);
 
     if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
@@ -173,8 +180,7 @@ void *cmdRecvThread(void *arg) {
     // TODO: Handle duplicates
 
     while (1) {
-        int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
-                         (struct sockaddr*)&client_addr, &addr_len);
+        int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
         if (n < 0) {
             perror("recvfrom failed");
             size_t nack_len = buildAckNack(nack_datagram, 0, 0);
@@ -187,7 +193,7 @@ void *cmdRecvThread(void *arg) {
 
         // Extract received CRC (last 4 bytes)
         // Minimum packet: SYNC(2) + HEADER(3) + RESERVED(4) + CRC(4) => 13 bytes
-        if (n < (2 + 3 + 4 + 4)) {
+        if (n < (SIZE_SYNC + SIZE_HEADER + SIZE_RESERVED + SIZE_CRC)) {
             printf("Packet too short\n");
             size_t nack_len = buildAckNack(nack_datagram, 0, 0);
             sendto(sockfd, nack_datagram, nack_len, 0, (struct sockaddr*)&client_addr, addr_len);
@@ -210,14 +216,8 @@ void *cmdRecvThread(void *arg) {
         uint8_t seq_num = header & MAX_SEQ_NUM;
         uint8_t *payload_start = (uint8_t*)buffer + 5;
 
-        // Ensure payload length excludes sync (2), header (3), reserved (4), and CRC (4)
-        if (n < (2 + 3 + 4 + 4)) {
-            printf("Packet too short for payload\n");
-            size_t nack_len = buildAckNack(nack_datagram, seq_num, 0);
-            sendto(sockfd, nack_datagram, nack_len, 0, (struct sockaddr*)&client_addr, addr_len);
-            continue;
-        }
-        size_t payload_len = n - 2 - 3 - 4 - 4;  // exclude sync, header, reserved, crc
+        // exclude sync, header, reserved, crc
+        size_t payload_len = n - (SIZE_SYNC + SIZE_HEADER + SIZE_RESERVED + SIZE_CRC);
 
         // Store in a reassembly buffer indexed by sequence
         static uint8_t reassembly_buf[MAX_MESSAGE_SIZE];
@@ -245,7 +245,6 @@ void *cmdRecvThread(void *arg) {
             // Clear buffer for next message
             reassembly_offset = 0;
             reassembly_buf[0] = '\0';
-
         } else {
             printf("Fragment %d received, awaiting more\n", seq_num & MAX_SEQ_NUM);
         }

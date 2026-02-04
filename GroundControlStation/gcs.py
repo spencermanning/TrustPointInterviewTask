@@ -11,6 +11,7 @@ def main():
     # Definitions:
         # Datagram
             # | SYNC (2 bytes) | HEADER (3 bytes) | PAYLOAD (variable) | RESERVED (4 bytes) | CRC32 (4 bytes) |
+            #                  | LEN | TYPE | SEQ |
         # "Message"
         #   All payloads sent in sequence, reassembled from datagrams on spacecraft
 
@@ -57,12 +58,14 @@ def main():
     DATA_SCIENCE         = 0x30
     DATA_IMAGE           = 0x31
 
+    # Test message pairs: (message, type). Can be added to as needed for testing
     test_message_pairs = [
         (b"CMD1", 0x01),  # CMD_EXECUTE
         (b"CMD2", 0x02),  # CMD_SET_PARAM
         (b"CMD3", 0x03),  # CMD_GET_PARAM
         (bytes(range(200)), 0x30),  # DATA_SCIENCE
         ]
+
     for msg_idx, msg_pair in enumerate(test_message_pairs):
         rxdata = b""
         if msg_idx > len(test_message_pairs) - 1:
@@ -77,7 +80,8 @@ def main():
         # while rxdata != b"ACK" and not max_retries_reached:
         while not max_retries_reached and not finished_message:
 
-            # Could need one more datagrams if message is long
+            # Could need one or more datagrams if message is long
+            # Divide message into fragments of MAX_PAYLOAD_SIZE
             for payload_cnt, payload in enumerate([msg_pair[0][i:i+MAX_PAYLOAD_SIZE] for i in range(0, len(msg_pair[0]), MAX_PAYLOAD_SIZE)]):
 
                 LEN = len(payload)
